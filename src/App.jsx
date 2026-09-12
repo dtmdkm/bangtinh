@@ -1,13 +1,38 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Plus, Trash2, DollarSign, Activity, TrendingUp, TrendingDown, Save } from 'lucide-react';
+import { Plus, Trash2, DollarSign, Activity, TrendingUp, TrendingDown, Save, Users, LogOut, X, UserPlus, Shield } from 'lucide-react';
 import { db } from './firebase';
-import { collection, getDocs, getDoc, doc, setDoc, writeBatch } from 'firebase/firestore';
+import { collection, getDocs, getDoc, doc, setDoc, writeBatch, deleteDoc } from 'firebase/firestore';
+
+// Helpers for number formatting
+const parseNumberInput = (val) => {
+  if (!val) return '';
+  return val.toString().replace(/\D/g, '');
+};
+
+const formatNumberInput = (val) => {
+  if (!val) return '';
+  const numStr = val.toString().replace(/\D/g, '');
+  return numStr.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+};
 
 function App() {
+  // Auth State
+  const [currentUser, setCurrentUser] = useState(null);
+  const [loginUsername, setLoginUsername] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [authError, setAuthError] = useState('');
+  
+  // Manage Users State
+  const [showUserModal, setShowUserModal] = useState(false);
+  const [systemUsers, setSystemUsers] = useState([]);
+  const [newUsername, setNewUsername] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [newUserRole, setNewUserRole] = useState('user');
+
   const [records, setRecords] = useState([]);
   const [initialInvestment, setInitialInvestment] = useState(0);
   const [isSaving, setIsSaving] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(false);
   
   // Stats
   const [stats, setStats] = useState({
@@ -18,10 +43,39 @@ function App() {
 
   const isFirebaseConfigured = db.app.options.apiKey !== "YOUR_API_KEY";
 
+  // Check and create default admin
+  const initDefaultAdmin = async () => {
+    if (!isFirebaseConfigured) return;
+    try {
+      const adminDoc = await getDoc(doc(db, "users", "admin"));
+      if (!adminDoc.exists()) {
+        await setDoc(doc(db, "users", "admin"), {
+          username: "admin",
+          password: "admin@",
+          role: "admin",
+          createdAt: Date.now()
+        });
+      }
+    } catch (e) {
+      console.error("Error creating default admin:", e);
+    }
+  };
+
+  useEffect(() => {
+    initDefaultAdmin();
+    // Check local storage for session
+    const savedUser = localStorage.getItem('officeSession');
+    if (savedUser) {
+      setCurrentUser(JSON.parse(savedUser));
+    }
+  }, []);
+
   // Load data
   useEffect(() => {
-    loadData();
-  }, []);
+    if (currentUser) {
+      loadData();
+    }
+  }, [currentUser]);
 
   // Calculate stats whenever records or investment changes
   useEffect(() => {
@@ -40,7 +94,113 @@ function App() {
     });
   }, [records, initialInvestment]);
 
+  // -------------- AUTH LOGIC --------------
+  const handleLogin = async (e) => {
+    e.preventDefault();
+    setAuthError('');
+    setIsLoading(true);
+
+    if (!isFirebaseConfigured) {
+      // Local testing auth fallback
+      if (loginUsername === 'admin' && loginPassword === 'admin@') {
+        const user = { username: 'admin', role: 'admin' };
+        setCurrentUser(user);
+        localStorage.setItem('officeSession', JSON.stringify(user));
+      } else {
+        setAuthError('Sai tài khoản hoặc mật khẩu!');
+      }
+      setIsLoading(false);
+      return;
+    }
+
+    try {
+      // Check in Firestore users collection (id is username)
+      const userDoc = await getDoc(doc(db, "users", loginUsername));
+      
+      if (userDoc.exists() && userDoc.data().password === loginPassword) {
+        const user = { username: userDoc.data().username, role: userDoc.data().role };
+        setCurrentUser(user);
+        localStorage.setItem('officeSession', JSON.stringify(user));
+      } else {
+        setAuthError('Sai tài khoản hoặc mật khẩu!');
+      }
+    } catch (error) {
+      console.error("Login error:", error);
+      setAuthError('Lỗi kết nối máy chủ!');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleLogout = () => {
+    setCurrentUser(null);
+    setRecords([]);
+    localStorage.removeItem('officeSession');
+  };
+
+  // -------------- ADMIN LOGIC --------------
+  const loadUsers = async () => {
+    if (!isFirebaseConfigured) return;
+    try {
+      const querySnapshot = await getDocs(collection(db, "users"));
+      const usersData = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setSystemUsers(usersData);
+    } catch (error) {
+      console.error("Error loading users:", error);
+    }
+  };
+
+  const openManageUsers = () => {
+    setShowUserModal(true);
+    loadUsers();
+  };
+
+  const handleCreateUser = async (e) => {
+    e.preventDefault();
+    if (!newUsername || !newPassword) return;
+    
+    if (systemUsers.find(u => u.username === newUsername)) {
+      alert("Tên tài khoản đã tồn tại!");
+      return;
+    }
+
+    try {
+      await setDoc(doc(db, "users", newUsername), {
+        username: newUsername,
+        password: newPassword,
+        role: newUserRole,
+        createdAt: Date.now()
+      });
+      setNewUsername('');
+      setNewPassword('');
+      setNewUserRole('user');
+      loadUsers(); // Refresh list
+    } catch (error) {
+      console.error("Error creating user", error);
+      alert("Lỗi khi tạo tài khoản!");
+    }
+  };
+
+  const handleDeleteUser = async (username) => {
+    if (username === 'admin') {
+      alert("Không thể xoá tài khoản Admin gốc!");
+      return;
+    }
+    if (window.confirm(`Bạn có chắc muốn xoá tài khoản ${username}?`)) {
+      try {
+        await deleteDoc(doc(db, "users", username));
+        loadUsers();
+      } catch (error) {
+        console.error("Error deleting user", error);
+        alert("Lỗi khi xoá tài khoản!");
+      }
+    }
+  };
+
+
+  // -------------- DATA LOGIC --------------
   const loadData = async () => {
+    setIsLoading(true);
     if (isFirebaseConfigured) {
       try {
         // Load investment
@@ -95,7 +255,7 @@ function App() {
   };
 
   const handleInvestmentChange = (e) => {
-    const val = Number(e.target.value);
+    const val = parseNumberInput(e.target.value);
     setInitialInvestment(val);
   };
 
@@ -132,11 +292,10 @@ function App() {
         // Save investment
         await setDoc(doc(db, "settings", "investment"), { amount: Number(initialInvestment) });
 
-        // Save records via Batch to replace all (for simplicity in this spreadsheet model)
-        // Note: A more robust way is syncing diffs, but for < 1000 rows batch overwrite is fine
+        // Save records via Batch to replace all
         const batch = writeBatch(db);
         
-        // Delete old records first to avoid orphans (requires fetching first)
+        // Delete old records first to avoid orphans
         const querySnapshot = await getDocs(collection(db, "transactions"));
         querySnapshot.forEach((doc) => {
           batch.delete(doc.ref);
@@ -150,20 +309,15 @@ function App() {
 
         await batch.commit();
         
-        // Update local state with valid records + 1 empty row to continue typing
         setRecords([...validRecords, createNewEmptyRecord()]);
-        
         alert("Đã lưu dữ liệu thành công!");
       } catch (error) {
         console.error("Error saving data:", error);
         alert("Lỗi khi lưu dữ liệu!");
       }
     } else {
-      // LocalStorage save
       localStorage.setItem('officeInvestment', initialInvestment);
       localStorage.setItem('officeRecords', JSON.stringify(validRecords));
-      
-      // Keep one empty row at the bottom
       setRecords([...validRecords, createNewEmptyRecord()]);
     }
     
@@ -174,18 +328,79 @@ function App() {
     return new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(amount || 0);
   };
 
+  // Calculate running balances for display
+  let currentBalance = Number(initialInvestment) || 0;
+  const recordsWithBalance = records.map(record => {
+    const expense = (Number(record.amount) || 0) + (Number(record.salary) || 0);
+    const revenue = Number(record.revenue) || 0;
+    currentBalance = currentBalance + revenue - expense;
+    return { ...record, runningBalance: currentBalance };
+  });
+
+  // -------------- RENDER LOGIN SCREEN --------------
+  if (!currentUser) {
+    return (
+      <div className="login-container">
+        <div className="login-card">
+          <Shield size={48} style={{ color: 'var(--primary)', margin: '0 auto 1rem auto', display: 'block' }} />
+          <h2>Đăng Nhập</h2>
+          <form onSubmit={handleLogin}>
+            <div className="form-group">
+              <label>Tài khoản</label>
+              <input 
+                type="text" 
+                className="form-control" 
+                style={{ width: '100%' }}
+                value={loginUsername}
+                onChange={e => setLoginUsername(e.target.value)}
+                placeholder="Nhập tên tài khoản..."
+                required
+              />
+            </div>
+            <div className="form-group">
+              <label>Mật khẩu</label>
+              <input 
+                type="password" 
+                className="form-control"
+                style={{ width: '100%' }}
+                value={loginPassword}
+                onChange={e => setLoginPassword(e.target.value)}
+                placeholder="Nhập mật khẩu..."
+                required
+              />
+            </div>
+            {authError && <div style={{ color: 'var(--danger)', marginBottom: '1rem', fontSize: '0.875rem' }}>{authError}</div>}
+            <button type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: '0.5rem' }} disabled={isLoading}>
+              {isLoading ? 'Đang kiểm tra...' : 'Đăng Nhập'}
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
+  // -------------- RENDER MAIN APP --------------
   return (
     <div className="container">
       <header className="flex-between" style={{ marginBottom: '2rem' }}>
         <div>
           <h1 className="text-gradient">Office Accounting</h1>
-          <p style={{ color: 'var(--text-secondary)' }}>Bảng tính nhập liệu trực tiếp</p>
+          <p style={{ color: 'var(--text-secondary)' }}>
+            Xin chào, <strong style={{ color: 'var(--primary)' }}>{currentUser.username}</strong>
+            {currentUser.role === 'admin' && <span className="badge" style={{ marginLeft: '0.5rem', backgroundColor: '#fef3c7', color: '#92400e' }}><Shield size={12} style={{ display: 'inline', marginRight: '2px', position: 'relative', top: '1px' }}/> Admin</span>}
+          </p>
         </div>
-        {!isFirebaseConfigured && (
-          <div className="badge badge-expense">
-            Chưa cấu hình Firebase (Đang dùng LocalStorage)
-          </div>
-        )}
+        
+        <div style={{ display: 'flex', gap: '0.5rem' }}>
+          {currentUser.role === 'admin' && (
+            <button className="btn btn-outline" onClick={openManageUsers}>
+              <Users size={16} /> Quản lý tài khoản
+            </button>
+          )}
+          <button className="btn btn-outline" onClick={handleLogout} style={{ color: 'var(--danger)', borderColor: 'var(--danger-bg)' }}>
+            <LogOut size={16} /> Đăng xuất
+          </button>
+        </div>
       </header>
 
       <div className="dashboard-grid">
@@ -198,12 +413,13 @@ function App() {
               {formatCurrency(initialInvestment)}
             </div>
             <input 
-              type="number" 
+              type="text" 
               className="form-control" 
-              style={{ width: '100%', padding: '0.5rem' }} 
-              value={initialInvestment || ''}
+              style={{ width: '100%', padding: '0.5rem', fontWeight: '500' }} 
+              value={formatNumberInput(initialInvestment)}
               onChange={handleInvestmentChange}
               placeholder="Nhập số tiền đầu tư..."
+              disabled={currentUser.role !== 'admin'}
             />
           </div>
         </div>
@@ -258,6 +474,7 @@ function App() {
                 <th style={{ width: '150px' }}>Số Tiền (Chi)</th>
                 <th style={{ width: '150px' }}>Tiền Lương (Chi)</th>
                 <th style={{ width: '150px' }}>Doanh Thu (Thu)</th>
+                <th style={{ width: '150px', textAlign: 'right' }}>Tồn Quỹ</th>
                 <th>Ghi Chú</th>
                 <th style={{ width: '50px', textAlign: 'center' }}>Xoá</th>
               </tr>
@@ -265,12 +482,12 @@ function App() {
             <tbody>
               {isLoading ? (
                 <tr>
-                  <td colSpan="8" style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>
+                  <td colSpan="9" style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>
                     <Activity size={24} style={{ animation: 'spin 1s linear infinite', marginBottom: '0.5rem' }} />
                     <div>Đang tải dữ liệu từ mây...</div>
                   </td>
                 </tr>
-              ) : records.map((record, index) => (
+              ) : recordsWithBalance.map((record, index) => (
                 <tr key={record.id}>
                   <td style={{ textAlign: 'center', color: 'var(--text-secondary)' }}>{index + 1}</td>
                   <td>
@@ -292,30 +509,33 @@ function App() {
                   </td>
                   <td>
                     <input 
-                      type="number" 
+                      type="text" 
                       className="inline-input text-right amount-expense"
                       placeholder="0"
-                      value={record.amount}
-                      onChange={(e) => handleRecordChange(record.id, 'amount', e.target.value)}
+                      value={formatNumberInput(record.amount)}
+                      onChange={(e) => handleRecordChange(record.id, 'amount', parseNumberInput(e.target.value))}
                     />
                   </td>
                   <td>
                     <input 
-                      type="number" 
+                      type="text" 
                       className="inline-input text-right amount-salary"
                       placeholder="0"
-                      value={record.salary}
-                      onChange={(e) => handleRecordChange(record.id, 'salary', e.target.value)}
+                      value={formatNumberInput(record.salary)}
+                      onChange={(e) => handleRecordChange(record.id, 'salary', parseNumberInput(e.target.value))}
                     />
                   </td>
                   <td>
                     <input 
-                      type="number" 
+                      type="text" 
                       className="inline-input text-right amount-revenue"
                       placeholder="0"
-                      value={record.revenue}
-                      onChange={(e) => handleRecordChange(record.id, 'revenue', e.target.value)}
+                      value={formatNumberInput(record.revenue)}
+                      onChange={(e) => handleRecordChange(record.id, 'revenue', parseNumberInput(e.target.value))}
                     />
+                  </td>
+                  <td style={{ textAlign: 'right', paddingRight: '1rem', verticalAlign: 'middle', fontWeight: '600', color: record.runningBalance >= 0 ? 'var(--success)' : 'var(--danger)' }}>
+                    {formatCurrency(record.runningBalance)}
                   </td>
                   <td>
                     <input 
@@ -348,6 +568,89 @@ function App() {
           </button>
         </div>
       </div>
+
+      {/* -------------- ADMIN MODAL -------------- */}
+      {showUserModal && (
+        <div className="modal-overlay">
+          <div className="modal-content">
+            <div className="modal-header">
+              <h2 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', margin: 0 }}>
+                <Shield size={24} style={{ color: 'var(--primary)' }} /> Quản lý Nhân Viên
+              </h2>
+              <button className="btn-outline" onClick={() => setShowUserModal(false)} style={{ padding: '0.25rem', border: 'none' }}>
+                <X size={20} />
+              </button>
+            </div>
+            
+            <form onSubmit={handleCreateUser} style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-end', marginBottom: '1.5rem', background: 'var(--bg-color)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+              <div style={{ flex: 1 }}>
+                <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.25rem' }}>Tài khoản mới</label>
+                <input 
+                  type="text" 
+                  className="form-control" 
+                  style={{ width: '100%' }}
+                  value={newUsername}
+                  onChange={e => setNewUsername(e.target.value)}
+                  placeholder="Nhập tên..."
+                  required
+                />
+              </div>
+              <div style={{ flex: 1 }}>
+                <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.25rem' }}>Mật khẩu</label>
+                <input 
+                  type="text" 
+                  className="form-control" 
+                  style={{ width: '100%' }}
+                  value={newPassword}
+                  onChange={e => setNewPassword(e.target.value)}
+                  placeholder="Nhập mật khẩu..."
+                  required
+                />
+              </div>
+              <div style={{ flex: 1 }}>
+                <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.25rem' }}>Phân quyền</label>
+                <select 
+                  className="form-control" 
+                  style={{ width: '100%' }}
+                  value={newUserRole}
+                  onChange={e => setNewUserRole(e.target.value)}
+                >
+                  <option value="user">Nhân viên</option>
+                  <option value="admin">Quản trị viên</option>
+                </select>
+              </div>
+              <button type="submit" className="btn btn-primary">
+                <UserPlus size={18} /> Thêm
+              </button>
+            </form>
+
+            <h3 style={{ fontSize: '1rem', marginBottom: '0.5rem', color: 'var(--text-primary)' }}>Danh sách tài khoản ({systemUsers.length})</h3>
+            <div className="user-list">
+              {systemUsers.map(user => (
+                <div key={user.id} className="user-item">
+                  <div>
+                    <strong style={{ display: 'block', color: 'var(--text-primary)' }}>{user.username}</strong>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                      Mật khẩu: <strong>{user.password}</strong> &bull; Quyền: {user.role === 'admin' ? 'Quản trị viên' : 'Nhân viên'}
+                    </span>
+                  </div>
+                  {user.username !== 'admin' && (
+                    <button 
+                      className="btn-outline" 
+                      onClick={() => handleDeleteUser(user.username)}
+                      style={{ padding: '0.5rem', color: 'var(--danger)', borderColor: 'var(--danger-bg)' }}
+                      title="Xoá tài khoản"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
