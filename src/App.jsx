@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Plus, Trash2, DollarSign, Activity, TrendingUp, TrendingDown, Save, Users, LogOut, X, UserPlus, Shield } from 'lucide-react';
+import { Plus, Trash2, DollarSign, Activity, TrendingUp, TrendingDown, Save, Users, LogOut, X, UserPlus, Shield, Eye, EyeOff, Edit2 } from 'lucide-react';
 import { db } from './firebase';
-import { collection, getDocs, getDoc, doc, setDoc, writeBatch, deleteDoc } from 'firebase/firestore';
+import { collection, getDocs, getDoc, doc, setDoc, writeBatch, deleteDoc, updateDoc } from 'firebase/firestore';
 
 // Helpers for number formatting
 const parseNumberInput = (val) => {
@@ -28,6 +28,8 @@ function App() {
   const [newUsername, setNewUsername] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [newUserRole, setNewUserRole] = useState('user');
+  const [showCreatePassword, setShowCreatePassword] = useState(false);
+  const [visiblePasswords, setVisiblePasswords] = useState({});
 
   const [records, setRecords] = useState([]);
   const [initialInvestment, setInitialInvestment] = useState(0);
@@ -152,7 +154,15 @@ function App() {
 
   const openManageUsers = () => {
     setShowUserModal(true);
+    setVisiblePasswords({}); // Reset visibility
     loadUsers();
+  };
+
+  const togglePasswordVisibility = (userId) => {
+    setVisiblePasswords(prev => ({
+      ...prev,
+      [userId]: !prev[userId]
+    }));
   };
 
   const handleCreateUser = async (e) => {
@@ -193,6 +203,22 @@ function App() {
       } catch (error) {
         console.error("Error deleting user", error);
         alert("Lỗi khi xoá tài khoản!");
+      }
+    }
+  };
+
+  const handleEditPassword = async (username) => {
+    const newPwd = window.prompt(`Nhập mật khẩu mới cho tài khoản [${username}]:`);
+    if (newPwd !== null && newPwd.trim() !== '') {
+      try {
+        await updateDoc(doc(db, "users", username), {
+          password: newPwd.trim()
+        });
+        loadUsers();
+        alert(`Đã đổi mật khẩu cho ${username} thành công!`);
+      } catch (error) {
+        console.error("Error updating password", error);
+        alert("Lỗi khi cập nhật mật khẩu!");
       }
     }
   };
@@ -597,15 +623,24 @@ function App() {
               </div>
               <div style={{ flex: 1 }}>
                 <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.25rem' }}>Mật khẩu</label>
-                <input 
-                  type="text" 
-                  className="form-control" 
-                  style={{ width: '100%' }}
-                  value={newPassword}
-                  onChange={e => setNewPassword(e.target.value)}
-                  placeholder="Nhập mật khẩu..."
-                  required
-                />
+                <div style={{ position: 'relative' }}>
+                  <input 
+                    type={showCreatePassword ? "text" : "password"} 
+                    className="form-control" 
+                    style={{ width: '100%', paddingRight: '2.5rem' }}
+                    value={newPassword}
+                    onChange={e => setNewPassword(e.target.value)}
+                    placeholder="Nhập mật khẩu..."
+                    required
+                  />
+                  <button 
+                    type="button"
+                    onClick={() => setShowCreatePassword(!showCreatePassword)}
+                    style={{ position: 'absolute', right: '0.5rem', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}
+                  >
+                    {showCreatePassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </div>
               </div>
               <div style={{ flex: 1 }}>
                 <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.25rem' }}>Phân quyền</label>
@@ -624,17 +659,34 @@ function App() {
               </button>
             </form>
 
-            <h3 style={{ fontSize: '1rem', marginBottom: '0.5rem', color: 'var(--text-primary)' }}>Danh sách tài khoản ({systemUsers.length})</h3>
+            <h3 style={{ fontSize: '1rem', marginBottom: '0.5rem', color: 'var(--text-primary)' }}>Danh sách tài khoản ({systemUsers.filter(u => u.username !== 'admin').length})</h3>
             <div className="user-list">
-              {systemUsers.map(user => (
+              {systemUsers.filter(u => u.username !== 'admin').map(user => (
                 <div key={user.id} className="user-item">
                   <div>
                     <strong style={{ display: 'block', color: 'var(--text-primary)' }}>{user.username}</strong>
-                    <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                      Mật khẩu: <strong>{user.password}</strong> &bull; Quyền: {user.role === 'admin' ? 'Quản trị viên' : 'Nhân viên'}
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '0.25rem', marginTop: '0.25rem' }}>
+                      Mật khẩu: <strong>{visiblePasswords[user.id] ? user.password : '••••••••'}</strong>
+                      <button 
+                        type="button"
+                        onClick={() => togglePasswordVisibility(user.id)}
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', padding: '0 0.25rem', display: 'flex', alignItems: 'center' }}
+                        title="Hiện/Ẩn mật khẩu"
+                      >
+                        {visiblePasswords[user.id] ? <EyeOff size={14} /> : <Eye size={14} />}
+                      </button>
+                      &bull; Quyền: {user.role === 'admin' ? 'Quản trị viên' : 'Nhân viên'}
                     </span>
                   </div>
-                  {user.username !== 'admin' && (
+                  <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    <button 
+                      className="btn-outline" 
+                      onClick={() => handleEditPassword(user.username)}
+                      style={{ padding: '0.5rem', color: 'var(--primary)', borderColor: 'var(--border-color)' }}
+                      title="Đổi mật khẩu"
+                    >
+                      <Edit2 size={16} />
+                    </button>
                     <button 
                       className="btn-outline" 
                       onClick={() => handleDeleteUser(user.username)}
@@ -643,7 +695,7 @@ function App() {
                     >
                       <Trash2 size={16} />
                     </button>
-                  )}
+                  </div>
                 </div>
               ))}
             </div>
